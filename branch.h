@@ -48,12 +48,35 @@ void setup_tracking(const char *new_ref, const char *orig_ref,
  *   - track causes the new branch to be configured to merge the remote branch
  *     that start_name is a tracking branch for (if any).
  *
+ *   - dry_run causes the branch to be validated but not created.
+ *
  */
-void create_branch(struct repository *r,
-		   const char *name, const char *start_name,
-		   int force, int clobber_head_ok,
-		   int reflog, int quiet, enum branch_track track);
+void create_branch(struct repository *r, const char *name,
+		   const char *start_name, int force, int clobber_head_ok,
+		   int reflog, int quiet, enum branch_track track, int dry_run);
 
+/*
+ * Creates a new branch in repository and its submodules (and its
+ * submodules, recursively). Besides these exceptions, the parameters
+ * function identically to create_branch():
+ *
+ * - start_name is the name of the ref, in repository r, that the new
+ *   branch should start from. In submodules, branches will start from
+ *   the respective gitlink commit ids in start_name's tree.
+ *
+ * - tracking_name is the name used of the ref that will be used to set
+ *   up tracking, e.g. origin/main. This is propagated to submodules so
+ *   that tracking information will appear as if the branch branched off
+ *   tracking_name instead of start_name (which is a plain commit id for
+ *   submodules). If omitted, start_name is used for tracking (just like
+ *   create_branch()).
+ *
+ */
+void create_branches_recursively(struct repository *r, const char *name,
+				 const char *start_name,
+				 const char *tracking_name, int force,
+				 int reflog, int quiet, enum branch_track track,
+				 int dry_run);
 /*
  * Check if 'name' can be a valid name for a branch; die otherwise.
  * Return 1 if the named branch already exists; return 0 otherwise.

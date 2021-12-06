@@ -72,6 +72,14 @@ submodule.recurse::
 	For these commands a workaround is to temporarily change the
 	configuration value by using `git -c submodule.recurse=0`.
 
+submodule.propagateBranches::
+	[EXPERIMENTAL] A boolean that enables branching support when
+	using `--recurse-submodules` or `submodule.recurse=true`.
+	Enabling this will allow certain commands to accept
+	`--recurse-submodules` and certain commands that already accept
+	`--recurse-submodules` will now consider branches.
+	Defaults to false.
+
 submodule.fetchJobs::
 	Specifies how many submodules are fetched/cloned at the same time.
 	A positive integer allows up to that number of submodules fetched

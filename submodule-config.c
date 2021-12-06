@@ -7,6 +7,7 @@
 #include "strbuf.h"
 #include "object-store.h"
 #include "parse-options.h"
+#include "tree-walk.h"
 
 /*
  * submodule cache lookup structure
@@ -724,6 +725,40 @@ const struct submodule *submodule_from_path(struct repository *r,
 {
 	repo_read_gitmodules(r, 1);
 	return config_from(r->submodule_cache, treeish_name, path, lookup_path);
+}
+
+void submodules_of_tree(struct repository *r,
+			const struct object_id *treeish_name,
+			struct submodule_entry_list *out)
+{
+	struct tree_desc tree;
+	struct submodule_tree_entry *st_entry;
+	struct name_entry *name_entry;
+
+	name_entry = xmalloc(sizeof(*name_entry));
+
+	CALLOC_ARRAY(out->entries, 0);
+	out->entry_nr = 0;
+	out->entry_alloc = 0;
+
+	fill_tree_descriptor(r, &tree, treeish_name);
+	while (tree_entry(&tree, name_entry)) {
+		if (!S_ISGITLINK(name_entry->mode) || !is_tree_submodule_active(r, treeish_name, name_entry->path)) {
+			continue;
+		}
+
+		st_entry = xmalloc(sizeof(*st_entry));
+		st_entry->name_entry = name_entry;
+		st_entry->submodule =
+			submodule_from_path(r, treeish_name, name_entry->path);
+		st_entry->repo = xmalloc(sizeof(*st_entry->repo));
+		if (repo_submodule_init(st_entry->repo, r, name_entry->path,
+					treeish_name))
+			FREE_AND_NULL(st_entry->repo);
+
+		ALLOC_GROW(out->entries, out->entry_nr + 1, out->entry_alloc);
+		out->entries[out->entry_nr++] = *st_entry;
+	}
 }
 
 void submodule_free(struct repository *r)
