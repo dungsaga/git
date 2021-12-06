@@ -18,6 +18,15 @@ extern enum branch_track git_branch_track;
 /* Functions for acting on the information about branches. */
 
 /*
+ * This sets the branch.<new_ref>.{remote,merge} config settings so that
+ * branch 'new_ref' tracks 'orig_ref'. This is called when branches are
+ * created, or when branch configs are updated (e.g. with
+ * git branch --set-upstream-to).
+ */
+void setup_tracking(const char *new_ref, const char *orig_ref,
+		    enum branch_track track, int quiet, int expand_orig);
+
+/*
  * Creates a new branch, where:
  *
  *   - r is the repository to add a branch to
@@ -29,8 +38,8 @@ extern enum branch_track git_branch_track;
  *
  *   - force enables overwriting an existing (non-head) branch
  *
- *   - clobber_head_ok allows the currently checked out (hence existing)
- *     branch to be overwritten; without 'force', it has no effect.
+ *   - clobber_head_ok, when enabled with 'force', allows the currently
+ *     checked out (head) branch to be overwritten
  *
  *   - reflog creates a reflog for the branch
  *

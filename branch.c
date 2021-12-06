@@ -126,43 +126,6 @@ out_err:
 	return -1;
 }
 
-/*
- * This is called when new_ref is branched off of orig_ref, and tries
- * to infer the settings for branch.<new_ref>.{remote,merge} from the
- * config.
- */
-static void setup_tracking(const char *new_ref, const char *orig_ref,
-			   enum branch_track track, int quiet)
-{
-	struct tracking tracking;
-	int config_flags = quiet ? 0 : BRANCH_CONFIG_VERBOSE;
-
-	memset(&tracking, 0, sizeof(tracking));
-	tracking.spec.dst = (char *)orig_ref;
-	if (for_each_remote(find_tracked_branch, &tracking))
-		return;
-
-	if (!tracking.matches)
-		switch (track) {
-		case BRANCH_TRACK_ALWAYS:
-		case BRANCH_TRACK_EXPLICIT:
-		case BRANCH_TRACK_OVERRIDE:
-			break;
-		default:
-			return;
-		}
-
-	if (tracking.matches > 1)
-		die(_("Not tracking: ambiguous information for ref %s"),
-		    orig_ref);
-
-	if (install_branch_config(config_flags, new_ref, tracking.remote,
-			      tracking.src ? tracking.src : orig_ref) < 0)
-		exit(-1);
-
-	free(tracking.src);
-}
-
 int read_branch_desc(struct strbuf *buf, const char *branch_name)
 {
 	char *v = NULL;
@@ -243,33 +206,35 @@ N_("\n"
 "will track its remote counterpart, you may want to use\n"
 "\"git push -u\" to set the upstream config as you push.");
 
-void create_branch(struct repository *r,
-		   const char *name, const char *start_name,
-		   int force, int clobber_head_ok, int reflog,
-		   int quiet, enum branch_track track)
+/**
+ * Validates whether a ref is a valid starting point for a branch, where:
+ *
+ *   - r is the repository to validate the branch for
+ *
+ *   - start_name is the ref that we would like to test. This is
+ *     expanded with DWIM and assigned to real_ref.
+ *
+ *   - track is the tracking mode of the new branch. If tracking is
+ *     explicitly requested, start_name must be a branch (because
+ *     otherwise start_name cannot be tracked)
+ *
+ *   - oid is an out parameter containing the object_id of start_name
+ *
+ *   - real_ref is an out parameter containing the full, 'real' form of
+ *     start_name e.g. refs/heads/main instead of main
+ *
+ */
+static void validate_branch_start(struct repository *r, const char *start_name,
+				  enum branch_track track,
+				  struct object_id *oid, char **real_ref)
 {
 	struct commit *commit;
-	struct object_id oid;
-	char *real_ref;
-	struct strbuf ref = STRBUF_INIT;
-	int forcing = 0;
-	int dont_change_ref = 0;
 	int explicit_tracking = 0;
 
 	if (track == BRANCH_TRACK_EXPLICIT || track == BRANCH_TRACK_OVERRIDE)
 		explicit_tracking = 1;
 
-	if ((track == BRANCH_TRACK_OVERRIDE || clobber_head_ok)
-	    ? validate_branchname(name, &ref)
-	    : validate_new_branchname(name, &ref, force)) {
-		if (!force)
-			dont_change_ref = 1;
-		else
-			forcing = 1;
-	}
-
-	real_ref = NULL;
-	if (get_oid_mb(start_name, &oid)) {
+	if (repo_get_oid_mb(r, start_name, oid)) {
 		if (explicit_tracking) {
 			if (advice_enabled(ADVICE_SET_UPSTREAM_FAILURE)) {
 				error(_(upstream_missing), start_name);
@@ -281,7 +246,8 @@ void create_branch(struct repository *r,
 		die(_("Not a valid object name: '%s'."), start_name);
 	}
 
-	switch (dwim_ref(start_name, strlen(start_name), &oid, &real_ref, 0)) {
+	switch (repo_dwim_ref(r, start_name, strlen(start_name), oid, real_ref,
+			      0)) {
 	case 0:
 		/* Not branching from any existing branch */
 		if (explicit_tracking)
@@ -289,12 +255,12 @@ void create_branch(struct repository *r,
 		break;
 	case 1:
 		/* Unique completion -- good, only if it is a real branch */
-		if (!starts_with(real_ref, "refs/heads/") &&
-		    validate_remote_tracking_branch(real_ref)) {
+		if (!starts_with(*real_ref, "refs/heads/") &&
+		    validate_remote_tracking_branch(*real_ref)) {
 			if (explicit_tracking)
 				die(_(upstream_not_branch), start_name);
 			else
-				FREE_AND_NULL(real_ref);
+				FREE_AND_NULL(*real_ref);
 		}
 		break;
 	default:
@@ -302,37 +268,96 @@ void create_branch(struct repository *r,
 		break;
 	}
 
-	if ((commit = lookup_commit_reference(r, &oid)) == NULL)
+	if ((commit = lookup_commit_reference(r, oid)) == NULL)
 		die(_("Not a valid branch point: '%s'."), start_name);
-	oidcpy(&oid, &commit->object.oid);
+	oidcpy(oid, &commit->object.oid);
+}
+
+void setup_tracking(const char *new_ref, const char *orig_ref,
+			   enum branch_track track, int quiet, int expand_orig)
+{
+	struct tracking tracking;
+	int config_flags = quiet ? 0 : BRANCH_CONFIG_VERBOSE;
+	char *full_orig_ref;
+	struct object_id unused_oid;
+
+	memset(&tracking, 0, sizeof(tracking));
+	if (expand_orig)
+		validate_branch_start(the_repository, orig_ref, track, &unused_oid, &full_orig_ref);
+	else
+		full_orig_ref = xstrdup(orig_ref);
+
+	tracking.spec.dst = full_orig_ref;
+	if (for_each_remote(find_tracked_branch, &tracking))
+		goto cleanup;
+
+	if (!tracking.matches)
+		switch (track) {
+		case BRANCH_TRACK_ALWAYS:
+		case BRANCH_TRACK_EXPLICIT:
+		case BRANCH_TRACK_OVERRIDE:
+			break;
+		default:
+			goto cleanup;
+		}
+
+	if (tracking.matches > 1)
+		die(_("Not tracking: ambiguous information for ref %s"),
+		    full_orig_ref);
+
+	if (install_branch_config(config_flags, new_ref, tracking.remote,
+			      tracking.src ? tracking.src : full_orig_ref) < 0)
+		exit(-1);
+
+cleanup:
+	free(tracking.src);
+	free(full_orig_ref);
+}
+
+void create_branch(struct repository *r, const char *name,
+		   const char *start_name, int force, int clobber_head_ok,
+		   int reflog, int quiet, enum branch_track track)
+{
+	struct object_id oid;
+	char *real_ref;
+	struct strbuf ref = STRBUF_INIT;
+	int forcing = 0;
+	struct ref_transaction *transaction;
+	struct strbuf err = STRBUF_INIT;
+	char *msg;
+
+	if (clobber_head_ok && !force)
+		BUG("'clobber_head_ok' can only be used with 'force'");
+
+	if (clobber_head_ok ?
+			  validate_branchname(name, &ref) :
+			  validate_new_branchname(name, &ref, force)) {
+		forcing = 1;
+	}
+
+	validate_branch_start(r, start_name, track, &oid, &real_ref);
 
 	if (reflog)
 		log_all_ref_updates = LOG_REFS_NORMAL;
 
-	if (!dont_change_ref) {
-		struct ref_transaction *transaction;
-		struct strbuf err = STRBUF_INIT;
-		char *msg;
+	if (forcing)
+		msg = xstrfmt("branch: Reset to %s", start_name);
+	else
+		msg = xstrfmt("branch: Created from %s", start_name);
 
-		if (forcing)
-			msg = xstrfmt("branch: Reset to %s", start_name);
-		else
-			msg = xstrfmt("branch: Created from %s", start_name);
-
-		transaction = ref_transaction_begin(&err);
-		if (!transaction ||
-		    ref_transaction_update(transaction, ref.buf,
-					   &oid, forcing ? NULL : null_oid(),
-					   0, msg, &err) ||
-		    ref_transaction_commit(transaction, &err))
-			die("%s", err.buf);
-		ref_transaction_free(transaction);
-		strbuf_release(&err);
-		free(msg);
-	}
+	transaction = ref_transaction_begin(&err);
+	if (!transaction ||
+		ref_transaction_update(transaction, ref.buf,
+					&oid, forcing ? NULL : null_oid(),
+					0, msg, &err) ||
+		ref_transaction_commit(transaction, &err))
+		die("%s", err.buf);
+	ref_transaction_free(transaction);
+	strbuf_release(&err);
+	free(msg);
 
 	if (real_ref && track)
-		setup_tracking(ref.buf + 11, real_ref, track, quiet);
+		setup_tracking(ref.buf + 11, real_ref, track, quiet, 0);
 
 	strbuf_release(&ref);
 	free(real_ref);
