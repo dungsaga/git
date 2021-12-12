@@ -250,17 +250,12 @@ sub read_all_remotes {
 			$r->{$_}->{svm} = $svm;
 		}
 		if (defined $r->{$_}->{svnsync}) {
-			my $svnsync;
 			eval {
 				my $section = "svn-remote.$_";
-				$svnsync = {
-					url => tmp_config('--get',
-					    "$section.svnsync-url"),
-					uuid => tmp_config('--get',
-					    "$section.svnsync-uuid"),
-				}
+				my $url = tmp_config('--get', "$section.svnsync-url");
+				my $uuid = tmp_config('--get', "$section.svnsync-uuid");
+				$r->{$_}->{svnsync} = { url => $url, uuid => $uuid };
 			};
-			$r->{$_}->{svnsync} = $svnsync;
 		}
 	} keys %$r;
 
