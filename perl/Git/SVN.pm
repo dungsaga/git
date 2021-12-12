@@ -188,7 +188,10 @@ sub read_all_remotes {
 	my $r = {};
 	my $use_svm_props = eval { command_oneline(qw/config --bool
 	    svn.useSvmProps/) };
+	my $use_svnsync_props = eval { command_oneline(qw/config --bool
+	    svn.useSvnsyncProps/) };
 	$use_svm_props = $use_svm_props eq 'true' if $use_svm_props;
+	$use_svnsync_props = $use_svnsync_props eq 'true' if $use_svnsync_props;
 	my $svn_refspec = qr{\s*(.*?)\s*:\s*(.+?)\s*};
 	foreach (grep { s/^svn-remote\.// } command(qw/config -l/)) {
 		if (m!^(.+)\.fetch=$svn_refspec$!) {
@@ -199,8 +202,11 @@ sub read_all_remotes {
 			$local_ref = uri_decode($local_ref);
 			$r->{$remote}->{fetch}->{$local_ref} = $remote_ref;
 			$r->{$remote}->{svm} = {} if $use_svm_props;
+			$r->{$remote}->{svnsync} = {} if $use_svnsync_props;
 		} elsif (m!^(.+)\.usesvmprops=\s*(.*)\s*$!) {
 			$r->{$1}->{svm} = {};
+		} elsif (m!^(.+)\.usesvnsyncprops=\s*(.*)\s*$!) {
+			$r->{$1}->{svnsync} = {};
 		} elsif (m!^(.+)\.url=\s*(.*)\s*$!) {
 			$r->{$1}->{url} = canonicalize_url($2);
 		} elsif (m!^(.+)\.pushurl=\s*(.*)\s*$!) {
@@ -242,6 +248,19 @@ sub read_all_remotes {
 				}
 			};
 			$r->{$_}->{svm} = $svm;
+		}
+		if (defined $r->{$_}->{svnsync}) {
+			my $svnsync;
+			eval {
+				my $section = "svn-remote.$_";
+				$svnsync = {
+					url => tmp_config('--get',
+					    "$section.svnsync-url"),
+					uuid => tmp_config('--get',
+					    "$section.svnsync-uuid"),
+				}
+			};
+			$r->{$_}->{svnsync} = $svnsync;
 		}
 	} keys %$r;
 
@@ -377,9 +396,14 @@ sub find_by_url { # repos_root and, path are optional
 		remove_username($u);
 		next if defined $repos_root && $repos_root ne $u;
 
+		my $svnsync = $remotes->{$repo_id}->{svnsync}
+			if defined $remotes->{$repo_id}->{svnsync};
+		my $svm = $remotes->{$repo_id}->{svm}
+			if defined $remotes->{$repo_id}->{svm};
 		my $rwr = rewrite_root({repo_id => $repo_id});
-		if ($rwr) {
-			$u = canonicalize_url($rwr);
+		my $mapped_url = $svnsync->{url} || $svm->{source} || $rwr;
+		if ($mapped_url) {
+			$u = canonicalize_url($mapped_url);
 			remove_username($u);
 		}
 		my $fetch = $remotes->{$repo_id}->{fetch} || {};
@@ -389,8 +413,6 @@ sub find_by_url { # repos_root and, path are optional
 			}
 		}
 		my $p = $path;
-		my $svm = $remotes->{$repo_id}->{svm}
-			if defined $remotes->{$repo_id}->{svm};
 		unless (defined $p) {
 			$p = $full_url;
 			my $z = $u;
